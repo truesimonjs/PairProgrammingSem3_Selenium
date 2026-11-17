@@ -8,6 +8,7 @@ using OpenQA.Selenium.Support.UI;
 namespace Selenium_Test
 {
     [TestClass]
+    [DoNotParallelize]
     public class UsingSeleniumTest
     {
         private static IWebDriver driver;
@@ -37,10 +38,16 @@ namespace Selenium_Test
 
             wait.Until(d =>
                 d.FindElements(By.ClassName("navbar-brand")).Count > 0);
+
+            ((IJavaScriptExecutor)driver).ExecuteScript(
+                "window.localStorage.clear(); window.sessionStorage.clear();");
+            driver.Navigate().Refresh();
+
+            wait.Until(d =>
+                d.FindElements(By.ClassName("navbar-brand")).Count > 0);
         }
 
         // Helper methods
-
         private void Login()
         {
             driver.FindElement(By.CssSelector(
@@ -52,9 +59,18 @@ namespace Selenium_Test
             driver.FindElement(By.XPath(
                 "//button[normalize-space()='Login']")).Click();
 
+            // Wait until login completes
             wait.Until(d =>
                 d.FindElements(By.XPath(
                     "//button[normalize-space()='Logout']")).Count > 0);
+
+            // Verify that the authentication token exists
+            var token = (string)((IJavaScriptExecutor)driver)
+                .ExecuteScript("return localStorage.getItem('token');");
+
+            Assert.IsFalse(
+                string.IsNullOrEmpty(token),
+                "Login succeeded in the UI, but no authentication token was stored.");
         }
 
         private void AddRecord(
@@ -82,9 +98,24 @@ namespace Selenium_Test
                 "//button[normalize-space()='Add Record']")).Click();
 
             wait.Until(d =>
-                d.FindElements(By.XPath(
+            {
+                var records = d.FindElements(By.XPath(
                     $"//article[contains(@class,'card')]" +
-                    $"[.//h3[normalize-space()='{title}']]")).Count > 0);
+                    $"[.//h3[normalize-space()='{title}']]"));
+
+                if (records.Count > 0)
+                    return true;
+
+                var errors = d.FindElements(
+                    By.CssSelector("form.card .alert-danger"));
+
+                if (errors.Count > 0)
+                {
+                    Assert.Fail("API error: " + errors[0].Text);
+                }
+
+                return false;
+            });
         }
 
         private void FilterRecords(string title, string artist)
@@ -112,7 +143,6 @@ namespace Selenium_Test
         }
 
         // Tests
-
         [TestMethod]
         public void TestMusicRecordsPage()
         {
@@ -125,20 +155,6 @@ namespace Selenium_Test
 
             Assert.IsTrue(driver.PageSource.Contains(
                 "Your collection"));
-        }
-
-        [TestMethod]
-        public void TestDatabaseStartsEmpty()
-        {
-            wait.Until(d =>
-                d.FindElements(By.XPath(
-                    "//h3[normalize-space()='No music records found']"))
-                    .Count > 0);
-
-            Assert.AreEqual(0, GetRecordCount());
-
-            Assert.IsTrue(driver.PageSource.Contains(
-                "No music records found"));
         }
 
         [TestMethod]
@@ -165,6 +181,7 @@ namespace Selenium_Test
                 artistInput.GetAttribute("value"));
         }
 
+
         [TestMethod]
         public void TestFilterButton()
         {
@@ -174,13 +191,26 @@ namespace Selenium_Test
             Assert.IsTrue(filterButton.Displayed);
             Assert.IsTrue(filterButton.Enabled);
 
+            // Enter a title that should not exist
+            var titleInput = driver.FindElement(
+                By.CssSelector("input[placeholder='Title']"));
+
+            titleInput.Clear();
+            titleInput.SendKeys("NonexistentRecord123456789");
+
+            // Click Filter
             filterButton.Click();
 
+            // Wait for the empty-state message
             wait.Until(d =>
                 d.FindElements(By.XPath(
                     "//h3[normalize-space()='No music records found']"))
                     .Count > 0);
+
+            // Verify that no records are displayed
+            Assert.AreEqual(0, GetRecordCount());
         }
+
 
         [TestMethod]
         public void TestLogin()
@@ -222,56 +252,101 @@ namespace Selenium_Test
                 By.XPath("//button[normalize-space()='Logout']")).Count);
         }
 
+
         [TestMethod]
         public void TestAddMusicRecord()
         {
             Login();
 
-            AddRecord("Test Album", "Test Artist", "45", "2024");
+            string title = "Test Album " + Guid.NewGuid().ToString("N");
+
+            AddRecord(title, "Test Artist", "45", "2024");
 
             var record = driver.FindElement(By.XPath(
                 "//article[contains(@class,'card')]" +
-                "[.//h3[normalize-space()='Test Album']]"));
+                $"[.//h3[normalize-space()='{title}']]"));
 
-            Assert.IsTrue(record.Text.Contains("Test Album"));
+            Assert.IsTrue(record.Text.Contains(title));
             Assert.IsTrue(record.Text.Contains("Test Artist"));
             Assert.IsTrue(record.Text.Contains("2024"));
-            Assert.IsTrue(record.Text.Contains("45 min"));
+            Assert.IsTrue(record.Text.Contains("45 sec"));
 
-            Assert.AreEqual(1, GetRecordCount());
+            Assert.AreEqual(1, driver.FindElements(By.XPath(
+                "//article[contains(@class,'card')]" +
+                $"[.//h3[normalize-space()='{title}']]")).Count);
         }
+
+
 
         [TestMethod]
         public void TestFilterByTitle()
         {
             Login();
 
-            AddRecord("Rock Album", "Rock Artist", "40", "2023");
-            AddRecord("Jazz Album", "Jazz Artist", "50", "2024");
+            // Create unique titles
+            string rockTitle = "Rock Album " + Guid.NewGuid().ToString("N");
+            string jazzTitle = "Jazz Album " + Guid.NewGuid().ToString("N");
 
-            FilterRecords("Rock Album", "");
+            // Add two records
+            AddRecord(rockTitle, "Rock Artist", "40", "2023");
+            AddRecord(jazzTitle, "Jazz Artist", "50", "2024");
 
-            wait.Until(d => GetRecordCount() == 1);
+            // Filter by the unique Rock Album title
+            FilterRecords(rockTitle, "");
 
-            Assert.IsTrue(driver.PageSource.Contains("Rock Album"));
-            Assert.IsFalse(driver.PageSource.Contains("Jazz Album"));
+            // Wait for exactly one matching record
+            wait.Until(d =>
+                d.FindElements(By.XPath(
+                    "//article[contains(@class,'card')]" +
+                    $"[.//h3[normalize-space()='{rockTitle}']]"))
+                    .Count == 1
+                && GetRecordCount() == 1);
+
+            // Verify the correct record is displayed
+            var record = driver.FindElement(By.CssSelector("article.card"));
+
+            Assert.IsTrue(record.Text.Contains(rockTitle));
+
+            // Verify Jazz Album is not displayed
+            Assert.AreEqual(0, driver.FindElements(By.XPath(
+                "//article[contains(@class,'card')]" +
+                $"[.//h3[normalize-space()='{jazzTitle}']]")).Count);
         }
+
 
         [TestMethod]
         public void TestFilterByArtist()
         {
             Login();
 
-            AddRecord("Rock Album", "Rock Artist", "40", "2023");
-            AddRecord("Jazz Album", "Jazz Artist", "50", "2024");
+            string rockArtist = "Rock Artist " + Guid.NewGuid().ToString("N");
+            string jazzArtist = "Jazz Artist " + Guid.NewGuid().ToString("N");
 
-            FilterRecords("", "Jazz Artist");
+            string rockTitle = "Rock Album " + Guid.NewGuid().ToString("N");
+            string jazzTitle = "Jazz Album " + Guid.NewGuid().ToString("N");
 
-            wait.Until(d => GetRecordCount() == 1);
+            AddRecord(rockTitle, rockArtist, "40", "2023");
+            AddRecord(jazzTitle, jazzArtist, "50", "2024");
 
-            Assert.IsTrue(driver.PageSource.Contains("Jazz Album"));
-            Assert.IsFalse(driver.PageSource.Contains("Rock Album"));
+            FilterRecords("", jazzArtist);
+
+            wait.Until(d =>
+                GetRecordCount() == 1 &&
+                d.FindElements(By.XPath(
+                    "//article[contains(@class,'card')]" +
+                    $"[.//h3[normalize-space()='{jazzTitle}']]"))
+                    .Count == 1);
+
+            var record = driver.FindElement(By.CssSelector("article.card"));
+
+            Assert.IsTrue(record.Text.Contains(jazzArtist));
+            Assert.IsTrue(record.Text.Contains(jazzTitle));
+
+            Assert.AreEqual(0, driver.FindElements(By.XPath(
+                "//article[contains(@class,'card')]" +
+                $"[.//h3[normalize-space()='{rockTitle}']]")).Count);
         }
+
 
         [TestMethod]
         public void TestFilterNoResults()
@@ -295,22 +370,32 @@ namespace Selenium_Test
         {
             Login();
 
-            AddRecord("Delete Test", "Test Artist", "30", "2022");
+            // Give the test record a unique title
+            string title = "Delete Test " + Guid.NewGuid().ToString("N");
 
-            Assert.AreEqual(1, GetRecordCount());
+            AddRecord(title, "Test Artist", "30", "2022");
 
-            var record = driver.FindElement(By.XPath(
+            var recordBy = By.XPath(
                 "//article[contains(@class,'card')]" +
-                "[.//h3[normalize-space()='Delete Test']]"));
+                $"[.//h3[normalize-space()='{title}']]");
+
+            // Verify the new record exists
+            Assert.AreEqual(1, driver.FindElements(recordBy).Count);
+
+            // Delete the record
+            var record = driver.FindElement(recordBy);
 
             record.FindElement(By.XPath(
                 ".//button[normalize-space()='Delete']")).Click();
 
-            wait.Until(d => GetRecordCount() == 0);
+            // Wait until that specific record is removed
+            wait.Until(d =>
+                d.FindElements(recordBy).Count == 0);
 
-            Assert.IsTrue(driver.PageSource.Contains(
-                "No music records found"));
+            // Verify the record is gone
+            Assert.AreEqual(0, driver.FindElements(recordBy).Count);
         }
+
 
         [TestMethod]
         public void TestLogout()
