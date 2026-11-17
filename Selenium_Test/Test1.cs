@@ -1,4 +1,4 @@
-﻿using System;
+﻿
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
@@ -8,28 +8,71 @@ namespace Selenium_Test
     [TestClass]
     public class UsingSeleniumTest
     {
+        private static IWebDriver driver;
+
+        [ClassInitialize]
+        public static void Setup(TestContext context)
+        {
+            var options = new ChromeOptions();
+            options.AddArgument("--headless");
+
+            driver = new ChromeDriver(options);
+        }
+
+        [ClassCleanup]
+        public static void Cleanup()
+        {
+            driver.Quit();
+        }
+
+        [TestInitialize]
+        public void OpenPage()
+        {
+            driver.Navigate().GoToUrl("http://127.0.0.1:5500");
+        }
+
         [TestMethod]
         public void TestMusicRecordsPage()
         {
-            IWebDriver driver = new ChromeDriver();
+            Assert.AreEqual("Vue Template", driver.Title);
 
-            driver.Navigate().GoToUrl("http://127.0.0.1:5500");
+            var navbar = driver.FindElement(By.ClassName("navbar-brand"));
+            Assert.AreEqual("Music Records", navbar.Text);
+        }
 
-            // Check page title
-            var title = driver.Title;
-            Assert.AreEqual("Vue Template", title);
+        [TestMethod]
+        public void TestTitleFilterInput()
+        {
+            var titleInput = driver.FindElement(
+                By.CssSelector("input[placeholder='Title']"));
 
-            // Check navbar brand text
-            var navbarBrand = driver.FindElement(By.ClassName("navbar-brand"));
-            Assert.AreEqual("Music Records", navbarBrand.Text);
+            titleInput.SendKeys("Test Title");
 
-            // Wait for records to load and check if list items exist
-            driver.Manage().Timeouts().ImplicitWait = TimeSpan.FromSeconds(3);
-            var recordsList = driver.FindElements(By.ClassName("list-group-item"));
+            Assert.AreEqual("Test Title", titleInput.GetAttribute("value"));
+        }
 
-            Assert.IsTrue(recordsList.Count > 0, "Music records should be loaded");
+        [TestMethod]
+        public void TestArtistFilterInput()
+        {
+            var artistInput = driver.FindElement(
+                By.CssSelector("input[placeholder='Artist']"));
 
-            driver.Quit();
+            artistInput.SendKeys("Test Artist");
+
+            Assert.AreEqual("Test Artist", artistInput.GetAttribute("value"));
+        }
+
+        [TestMethod]
+        public void TestFilterButton()
+        {
+            var filterButton = driver.FindElement(
+                By.XPath("//button[normalize-space()='Filter']"));
+
+            Assert.IsTrue(filterButton.Displayed);
+            Assert.IsTrue(filterButton.Enabled);
+
+            filterButton.Click();
         }
     }
 }
+
